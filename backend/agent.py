@@ -1,9 +1,8 @@
 """LLM Agent for SHL Assessment recommendation conversations."""
 import json
 import os
-from google import genai
-from google.genai import types
-from .config import GEMINI_API_KEY, GEMINI_MODEL
+from openai import OpenAI
+from .config import OPENAI_API_KEY, OPENAI_MODEL
 from .retrieval import AssessmentRetriever
 
 retriever = AssessmentRetriever()
@@ -128,18 +127,13 @@ def _sanitize_response(result: dict, retrieved: list[dict]) -> dict:
     }
 
 
-def _build_gemini_contents(messages: list[dict]) -> list[types.Content]:
-    """Convert chat messages to Gemini Content format."""
-    contents = []
+def _build_openai_messages(system: str, messages: list[dict]) -> list[dict]:
+    """Convert chat messages to OpenAI message format."""
+    openai_messages = [{"role": "system", "content": system}]
     for msg in messages[-8:]:  # Last 8 messages (4 turns)
-        role = "user" if msg["role"] == "user" else "model"
-        contents.append(
-            types.Content(
-                role=role,
-                parts=[types.Part.from_text(text=msg["content"])],
-            )
-        )
-    return contents
+        role = "user" if msg["role"] == "user" else "assistant"
+        openai_messages.append({"role": role, "content": msg["content"]})
+    return openai_messages
 
 
 def get_agent_reply(messages: list[dict]) -> dict:
@@ -157,27 +151,24 @@ def get_agent_reply(messages: list[dict]) -> dict:
     system = SYSTEM_PROMPT.format(retrieved_context=context)
 
     # Step 5: Call LLM
-    if not GEMINI_API_KEY:
+    if not OPENAI_API_KEY:
         # Fallback: rule-based response when no API key
         return _fallback_response(messages, retrieved)
 
     try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
+        client = OpenAI(api_key=OPENAI_API_KEY)
 
-        contents = _build_gemini_contents(messages)
+        openai_messages = _build_openai_messages(system, messages)
 
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system,
-                temperature=0.1,
-                max_output_tokens=2000,
-                response_mime_type="application/json",
-            ),
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=openai_messages,
+            temperature=0.1,
+            max_tokens=2000,
+            response_format={"type": "json_object"},
         )
 
-        raw = response.text
+        raw = response.choices[0].message.content
         result = json.loads(raw)
         return _sanitize_response(result, retrieved)
 
